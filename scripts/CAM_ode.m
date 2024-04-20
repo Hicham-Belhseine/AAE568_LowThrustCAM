@@ -1,4 +1,4 @@
-function dydt = CAM_ode(t,y,tc,k,v1,n1,r1,a0,dtheta_t)
+function dydt = CAM_ode(t,y,k,v1,n1,r1,a0,dtheta_t,theta_c)
 %% Function Name: CAM_ode
 %
 % Description: Set of ODEs describing a low-thrust collision avoidance
@@ -36,8 +36,8 @@ lambda1 = y(3);
 lambda2 = y(4);
 
 % Parameters for state update and input updates
-dtheta = (tc - t) * n1;
 theta = t * n1;
+dtheta = theta_c - theta;
 
 % Optimal Input from Pontryagin Maximum Principle
 R = [
@@ -47,14 +47,14 @@ R = [
 
 K = [
     -v1,         0.0,       0.0;
-     0.0,        0.0, -sign(xi);
-     0.0,  -sign(xi),       0.0
+     0.0,        0.0,       1.0;
+     0.0,        1.0,       0.0
 ];
 
 Drr  = sin(dtheta) / n1;
 Drth = (2 - 2*cos(dtheta)) / n1;
 Dtr  = (2 - 2*cos(dtheta)) / (n1^2 * r1);
-Dtth = 4 * (3*dtheta - sin(dtheta)) / (n1^2 * r1);
+Dtth = (3*dtheta - sin(dtheta)) / (n1^2 * r1);  % Works without the 4 in front?
 Dwh  = sin(dtheta) / n1;
 
 D = [
@@ -67,12 +67,7 @@ M = R*K*D;
 
 u = a0*M'*[lambda1; lambda2] / norm(M'*[lambda1; lambda2]);
 
-% apply state update if still part of thrust arc
-if theta < dtheta_t
-    dbdt = M * u;
-else
-    dbdt = [0; 0];
-end
+dbdt = M * u;
 
 dydt(1) = dbdt(1);
 dydt(2) = dbdt(2);

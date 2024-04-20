@@ -45,17 +45,20 @@ n1 = 2*pi / T1;
 n2 = 2*pi / T2;
 
 dtheta_t = 200 * pi/180;
-n_revs = 1;
+n_revs = 5;
 
-time = linspace(0,(2*pi*n_revs + dtheta_t/2)/n1,2e3);
-
+% time = linspace(0,(2*pi*n_revs + dtheta_t/2)/n1,2e3);
+time = linspace(0,dtheta_t/n1,5e2);
+theta_c = 2*pi*n_revs + dtheta_t/2;
 tc = time(end);
 
-solinit = bvpinit(time, [r2-r1, 0, 0.0026, 0.0158]);
-options = bvpset('Stats','on','RelTol',1e-8);
+
+% Run TPBVP
+solinit = bvpinit(time, [r2-r1, 0, 0.0123, 0.0716]);
+options = bvpset('Stats','off','RelTol',1e-8);
 
 sol = bvp4c( ...
-    @ (t,y) CAM_ode(t,y,tc,kappa,v1,n1,r1,a0,dtheta_t), ...
+    @ (t,y) CAM_ode(t,y,kappa,v1,n1,r1,a0,dtheta_t,theta_c), ...
     @ (ya,yb) CAM_bc(ya,yb,r2-r1,0,sigx,sigy,Theta), ...
     solinit, ...
     options  ...
@@ -68,11 +71,46 @@ zeta = sol.y(2,:);
 bplane2x = @ (xi,zeta,Theta) xi*cos(Theta) + zeta*sin(Theta);
 bplane2y = @ (xi,zeta,Theta) xi*sin(Theta) - zeta*cos(Theta);
 
+% bplane2x = @ (xi,zeta,Theta) zeta*cos(Theta) + xi*sin(Theta);
+% bplane2y = @ (xi,zeta,Theta) zeta*sin(Theta) - xi*cos(Theta);
+
 x = bplane2x(xi,zeta,Theta);
 y = bplane2y(xi,zeta,Theta);
 
 p_t0 = p_collision(x(1),y(1),sigx,sigy,s1+s2)
 p_tf = p_collision(x(end),y(end),sigx,sigy,s1+s2)
+revs = .25:.05:1;
+out = [];
+for i = 1:length(revs)
+    n_revs = revs(i);
+    
+    time = linspace(0,dtheta_t/n1,100);
+    theta_c = 2*pi*n_revs + dtheta_t/2;
+
+    sol = bvp4c( ...
+        @ (t,y) CAM_ode(t,y,kappa,v1,n1,r1,a0,dtheta_t,theta_c), ...
+        @ (ya,yb) CAM_bc(ya,yb,r2-r1,0,sigx,sigy,Theta), ...
+        solinit, ...
+        options  ...
+    );
+    
+    t = sol.x*n1/2/pi;
+    xi = sol.y(1,:);
+    zeta = sol.y(2,:);
+    
+    bplane2x = @ (xi,zeta,Theta) xi*cos(Theta) + zeta*sin(Theta);
+    bplane2y = @ (xi,zeta,Theta) xi*sin(Theta) - zeta*cos(Theta);
+    
+    x = bplane2x(xi,zeta,Theta);
+    y = bplane2y(xi,zeta,Theta);
+    
+    p_t0 = p_collision(x(1),y(1),sigx,sigy,s1+s2);
+    p_tf = p_collision(x(end),y(end),sigx,sigy,s1+s2);
+
+    out(i) = p_tf;
+end
+
+semilogy(revs,out); grid on; box on;
 
 %% Functions
 function res = CAM_bc(ya,yb,xi0,zeta0,sig_x,sig_y,Theta)
@@ -105,7 +143,7 @@ function res = CAM_bc(ya,yb,xi0,zeta0,sig_x,sig_y,Theta)
         -rho_xi_zeta/sig_xi/sig_zeta  1/sig_zeta^2;
     ];
 
-    % Q = eye(2);
+%     Q = eye(2);
 
     % final time condition from Pontryagin's maximum principle
     lambda_tf = Q*[yb(1);yb(2)];
