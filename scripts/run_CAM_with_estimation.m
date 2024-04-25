@@ -6,19 +6,16 @@
 % plot_Earth_AAE590 function and 2k_Earth_July_topography picture
 % for generating Earth image (on github)
 
-% satellite measurement info to mess around with: dt, num
-% noise/variance info to mess around with: sig_r, sig_v, Qs
-% orbital parameters to mess around with: i1, i2, raan1, raan2, h1, h2
+% satellite measurement info to mess around with:   dt, num
+% noise/variance info to mess around with:          sig_r, sig_v, Qs
+% orbital parameters to mess around with:           i1, i2, raan1, raan2, h1, h2
 
 % raan1 and raan2 should be equally spaced in order to garuntee TCA at t0
 
-% im not totally sure if sig_x and sig_y are principal covariance ellipse
-% or rtn covariance so p_collision calcs could be incorrect
+% sig_x and sig_y correspond to rtn frame I believe
 
-% we could calculate p_collision values w/ Chans algorithm (truncating
-% to a certain number of terms)
+% dot(r,u) ~= 0 at all times (tangential CAM is almost optimal)
 
-% i wanted to prove that dot(r,u) = 0 at all times (tangential CAM)
 
 %% Clear & close
 
@@ -98,13 +95,13 @@ x_S1_backprop = flip(x_S1_backprop)';
 x_S2_backprop = flip(x_S2_backprop)';
 
 
-x0_S1_true = x_S1_backprop(:,1);           % saying this is the true state at first measurement time (in actually we wont know this but its nice to show)
+x0_S1_true = x_S1_backprop(:,1);          % saying this is the true state at first measurement time (in actually we wont know this but its nice to show)
 x0_S2_true = x_S2_backprop(:,1);
 z1 = x_S1_backprop(1:3,:);               % position only measurements
 z2 = x_S2_backprop(1:3,:); 
 
-sig_r = 1000;                            % position noise (m)
-sig_v = 1;                            % velocity noise (m/s)
+sig_r = 100;                            % position noise (m)
+sig_v = 0.1;                            % velocity noise (m/s)
 for k = 1:num
     z1(:,k) = z1(1:3,k)+sig_r*randn(3,1); % adding gaussian noise to observations
     z2(:,k) = z2(1:3,k)+sig_r*randn(3,1); % adding gaussian noise to observations
@@ -162,23 +159,30 @@ Cr_S2 = [Pkp2(1,1:3);
          Pkp2(2,1:3);
          Pkp2(3,1:3)];
 Cr = Cr_S1 + Cr_S2;
+
+% rotation from ECI to enc frame to find sigmas in enc frame and Theta
 [~,DCM_TCA] = eci2enc(r1_vec,v1_vec,r2_vec,v2_vec);
-Cr_bplane = DCM_TCA*Cr*DCM_TCA';
+Cr_enc = DCM_TCA*Cr*DCM_TCA';
+C = [Cr_enc(1,1) Cr_enc(1,3);
+     Cr_enc(3,1) Cr_enc(3,3)];
+sig_xi = sqrt(Cr_enc(1,1));
+sig_zeta = sqrt(Cr_enc(3,3));
+rho_xi_zeta = Cr_enc(3,1)/(sig_xi*sig_zeta);
+Theta = 1/2*atan2(2*rho_xi_zeta*sig_xi*sig_zeta,(sig_xi^2-sig_zeta^2));
 
-C = [Cr_bplane(1,1) Cr_bplane(1,3);
-     Cr_bplane(3,1) Cr_bplane(3,3)];
 
-sig_xi = sqrt(Cr_bplane(1,1));
-sig_zeta = sqrt(Cr_bplane(3,3));
-rho_xi_zeta = Cr_bplane(3,1)/(sig_xi*sig_zeta);
+% rotation from ECI to rtn frame to get sig_x and sig_y 
+[Cr_rtn] = eci2rtn(Cr,r1_vec,v1_vec);
+sig_x = sqrt(Cr_rtn(1,1));
+sig_y = sqrt(Cr_rtn(2,2));
+sig_xi_test = sqrt( ...
+        (sig_x^2 + sig_y^2 + (sig_x^2 - sig_y^2)*cos(2*Theta)) / 2 ...
+              );
+sig_zeta_test = sqrt( ...
+        (sig_x^2 + sig_y^2 - (sig_x^2 - sig_y^2)*cos(2*Theta)) / 2 ...
+                );
+rho_xi_zeta_test = (sig_x^2 - sig_y^2) * sin(2*Theta) / sig_xi / sig_zeta;
 
-[eigenaxes,sigmas_principal] = eig(C);
-sig_x = sigmas_principal(1,1);
-sig_y = sigmas_principal(2,2);
-sinTheta = [eigenaxes(1,2); eigenaxes(2,1)];
-cosTheta = [eigenaxes(1,1); -eigenaxes(2,2)];
-Theta = atan2(sinTheta,cosTheta); % which one?
-Theta = Theta(2); % for now
 
 Q = [
         1/sig_xi^2    -rho_xi_zeta/sig_xi/sig_zeta;
@@ -189,8 +193,8 @@ Q = [
 %% Timing paramters (thrust arc and coast arc)
 
 npts = 10000;
-del_theta_t = 200 * pi/180; % thrust arc duration (mess around w this)
-n_revs = 2;
+del_theta_t = 180 * pi/180; % thrust arc duration (mess around w this)
+n_revs = pi - del_theta_t/2; % next conjunction 180 degrees after first
 del_theta_c = 2*pi*n_revs - del_theta_t/2;
 theta_c = 2*pi*n_revs + del_theta_t/2;
 
@@ -250,17 +254,19 @@ lambda1 = sol.y(3,:);
 lambda2 = sol.y(4,:);
 lambda = sol.y(3:4,:);
 
+
 bplane2x = @ (xi,zeta,Theta) xi*cos(Theta) + zeta*sin(Theta);
 bplane2y = @ (xi,zeta,Theta) xi*sin(Theta) - zeta*cos(Theta);
 
 x = bplane2x(xi,zeta,Theta);
 y = bplane2y(xi,zeta,Theta);
 
-% it might make more sense to use Chans algorithm instead of the
-% Pelayo-Aysuo formula (with sig_x and sig_y) since idk if I calculated
-% them right
-p_t0 = p_collision_calc(x(1),y(1),sig_x,sig_y,sA)
-p_tf = p_collision_calc(x(end),y(end),sig_x,sig_y,sA)
+p_t0_Ayuso = p_collision_calc_Ayuso(x(1),y(1),sig_x,sig_y,sA)
+p_tf_Ayuso = p_collision_calc_Ayuso(x(end),y(end),sig_x,sig_y,sA)
+
+% trunc = 4;
+% p_t0_Chan = p_collision_calc_Chan(xi(1),zeta(1),sig_xi,sig_zeta,rho_xi_zeta,sA,trunc);
+% p_tf_Chan = p_collision_calc_Chan(xi(end),zeta(end),sig_xi,sig_zeta,rho_xi_zeta,sA,trunc);
 
 
 %% finding control input and propagating S1 with control input
@@ -268,6 +274,8 @@ p_tf = p_collision_calc(x(end),y(end),sig_x,sig_y,sA)
 u = NaN(3,length(t));
 tangential_test = NaN(1,length(t));
 dbdt = NaN(2,length(t));
+%p_Chan = NaN(1,length(t));
+p_Ayuso = NaN(1,length(t));
 
 % control input calc
 for ct=1:length(t)
@@ -310,6 +318,8 @@ for ct=1:length(t)
     
     u(:,ct) = a0*M'*lambda(:,ct) / norm(M'*lambda(:,ct));
     dbdt(:,ct) = M * u(:,ct);
+    p_Ayuso(ct) = p_collision_calc_Ayuso(x(ct),y(ct),sig_x,sig_y,sA);
+    %p_Chan(ct) = p_collision_calc_Chan(xi(ct),zeta(ct),sig_xi,sig_zeta,rho_xi_zeta,sA,trunc);
 
 end
 u_hat = u./vecnorm(u);
@@ -361,8 +371,8 @@ grid on
 title('$b$ vs $t$','Interpreter','latex')
 xlabel('$t \; [s]$','Interpreter','latex')
 ylabel('$b \; [m]$','Interpreter','latex')
+xlim([t(1) t(end)])
 legend('$\xi$','$\zeta$','Interpreter','latex')
-
 subplot(2,2,2);
 plot(t,dbdt(1,:))
 hold on
@@ -371,8 +381,8 @@ grid on
 title('$\dot{b}$ vs $t$','Interpreter','latex')
 xlabel('$t \; [s]$','Interpreter','latex')
 ylabel('$\dot{b} \; [\frac{m}{s}]$','Interpreter','latex')
+xlim([t(1) t(end)])
 legend('$\dot{\xi}$','$\dot{\zeta}$','Interpreter','latex')
-
 subplot(2,2,3);
 plot(t,u_hat(1,:))
 hold on
@@ -383,14 +393,56 @@ grid on
 title('$u$ vs $t$','Interpreter','latex')
 xlabel('$t \; [s]$','Interpreter','latex')
 ylabel('$u \; [\frac{m}{s^2}]$','Interpreter','latex')
+xlim([t(1) t(end)])
 legend('$u_{r}$','$u_{\theta}$','$u_h$','Interpreter','latex')
-
 subplot(2,2,4);
 plot(t,tangential_test)
 grid on
-title('$\hat{u} \cdot \hat{r}$ vs $t$ in ECI frame','Interpreter','latex')
+title('$\hat{u} \cdot \hat{r}$ vs $t$','Interpreter','latex')
 xlabel('$t \; [s]$','Interpreter','latex')
 ylabel('$\hat{u} \cdot \hat{r}$','Interpreter','latex')
+xlim([t(1) t(end)])
+
+
+% plot of state history in ECI frame
+figure()
+subplot(2,2,1);
+plot(t,x_S1_controlled(1,:),'r')
+hold on
+plot(t,x_S2(1,:),'g')
+grid on
+title('$x$ vs $t$','Interpreter','latex')
+xlabel('$t \; [s]$','Interpreter','latex')
+ylabel('$x \; [m]$','Interpreter','latex')
+xlim([t(1) t(end)])
+legend('$x_{S_1}$','$x_{S_2}$','Interpreter','latex')
+subplot(2,2,2);
+plot(t,x_S1_controlled(2,:),'r')
+hold on
+plot(t,x_S2(2,:),'g')
+grid on
+title('$y$ vs $t$','Interpreter','latex')
+xlabel('$t \; [s]$','Interpreter','latex')
+ylabel('$y \; [m]$','Interpreter','latex')
+xlim([t(1) t(end)])
+legend('$y_{S_1}$','$y_{S_2}$','Interpreter','latex')
+subplot(2,2,3);
+plot(t,x_S1_controlled(1,:),'r')
+hold on
+plot(t,x_S2(1,:),'g')
+grid on
+title('$z$ vs $t$','Interpreter','latex')
+xlabel('$t \; [s]$','Interpreter','latex')
+ylabel('$z \; [m]$','Interpreter','latex')
+xlim([t(1) t(end)])
+legend('$z_{S_1}$','$z_{S_2}$','Interpreter','latex')
+subplot(2,2,4);
+plot(t,p_Ayuso,'k')
+grid on
+title('$P_{collision}$ vs $t$','Interpreter','latex')
+xlabel('$t \; [s]$','Interpreter','latex')
+ylabel('$P_{collision}$','Interpreter','latex')
+xlim([t(1) t(end)])
 
 
 toc
@@ -400,22 +452,6 @@ toc
 
 % TPBVP functions
 function res = bvp_bc(ya,yb,b0,Q)
-
-    % sig_xi = sqrt( ...
-    %     (sig_x^2 + sig_y^2 - (sig_x^2 - sig_y^2)*cos(2*Theta)) / 2 ...
-    % );
-    % 
-    % sig_zeta = sqrt( ...
-    %     (sig_x^2 + sig_y^2 + (sig_x^2 - sig_y^2)*cos(2*Theta)) / 2 ...
-    % );
-    % 
-    % rho_xi_zeta = (sig_x^2 - sig_y^2) * sin(2*Theta) / sig_xi / sig_zeta;
-    % 
-    % Q = [
-    %     1/sig_xi^2    -rho_xi_zeta/sig_xi/sig_zeta;
-    %     -rho_xi_zeta/sig_xi/sig_zeta  1/sig_zeta^2;
-    % ];
-
 
     % final time condition from Pontryagin's maximum principle
     lambda_tf = Q*yb(3:4);
@@ -859,10 +895,28 @@ end
 
 
 % collision probability functions
-function P = p_collision_calc(x,y,sig_x,sig_y,S_A)
+function P = p_collision_calc_Ayuso(x,y,sig_x,sig_y,S_A)
 
     P = S_A^2 / (2*sig_x*sig_y) * ...
         (1 + 1/8*((x.^2/sig_x^2 - 1)/(sig_x^2) + ((y.^2/sig_y^2 - 1)/(sig_y^2) )) ) .* ...
         exp(-1/2*(x.^2/sig_x^2 + y.^2/sig_y^2));
+
+end
+
+% smth is wrong with this function below
+function P = p_collision_calc_Chan(xi,zeta,sig_xi,sig_zeta,rho_xi_zeta,sA,trunc)
+    
+    u = sA^2/(sig_xi*sig_zeta*sqrt(1-rho_xi_zeta^2));
+    v = ((xi/sig_xi)^2+(zeta/sig_zeta)^2-2*rho_xi_zeta*xi/sig_xi*zeta/sig_zeta)/(1-rho_xi_zeta^2);
+
+    ksum = 0;
+    msum = 0;
+    for m = 0:trunc
+        for k = 0:m
+            ksum = ksum + u^k/(2^k*factorial(k));
+        end
+        msum = msum + v^m/(2^m*factorial(m))*(1-exp(-u/2)*ksum);
+    end
+    P = exp(-v/2)*msum;
 
 end
