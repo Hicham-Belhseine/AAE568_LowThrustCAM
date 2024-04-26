@@ -64,7 +64,7 @@ D = [
 ];
 
 M = R*K*D;
-
+ 
 u = a0*M'*[lambda1; lambda2] / norm(M'*[lambda1; lambda2]);
 
 dbdt = M * u;
