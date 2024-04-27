@@ -48,6 +48,14 @@ f1 = 3e-3;
 a0 = f1 / m1;  % maximum acceleration magnitude
 
 
+%% Timing paramters (thrust arc and coast arc)
+
+del_theta_t = 60 * pi/180; % thrust arc duration (mess around w this)
+n_revs = 30/360; 
+del_theta_c = 2*pi*n_revs - del_theta_t/2;
+theta_c = 2*pi*n_revs + del_theta_t/2;
+
+
 %% Orbital params at time of closest approach (TCA)
 
 h1 = 550.0e3;  % Orbit height of vehicle 1 (m)
@@ -68,13 +76,13 @@ n2 = sqrt(mu/a2^3);  % mean motion of S2 (rad/s)
 T1 = 2*pi/n1;  % period of S1 (s)
 T2 = 2*pi/n2;  % period of S2 (s)
 
-theta1 = deg2rad(0); % true anom of S1 at t0 for control maneuver (rad)
-theta2 = deg2rad(180); % true anom of S2 at t0 for control maneuver (rad)
+theta1 = deg2rad(0)-del_theta_t; % true anom of S1 at t0 for control maneuver (rad)
+theta2 = deg2rad(180)-del_theta_t; % true anom of S2 at t0 for control maneuver (rad)
 
 % mutual inclination, angle between orbital planes
 kappa = acos(sin(i1)*sin(i2)*cos(RAAN1-RAAN2) + cos(i1)*cos(i2));
 
-% Cartesian state at TCA
+% Cartesian state at t0 of maneuver
 [r1_vec_true,v1_vec_true] = orb2cartesian(a1,0,i1,RAAN1,0,theta1,mu);
 [r2_vec_true,v2_vec_true] = orb2cartesian(a2,0,i2,RAAN2,0,theta2,mu);
 
@@ -82,8 +90,8 @@ kappa = acos(sin(i1)*sin(i2)*cos(RAAN1-RAAN2) + cos(i1)*cos(i2));
 %% back-propagate S1 and S2 to get some noisy measurements to use for control problem
 
 t0 = 0;
-dt = 20;                                % time step of measurements
-num = 50;                              % number of measurements
+dt = 5;                                % time step of measurements
+num = 100;                              % number of measurements
 tk_vec = 0:dt:num*dt-1;                 % measurement time vector
 
 [~,x_S1_backprop] = ode45(@eom_tbp_state, flip(tk_vec), ...
@@ -133,15 +141,17 @@ show_plots = 1;     % set to 0 for no plots
 m0_S1 = x0_S1_true;   % initial mean (using for now)
 m0_S2 = x0_S2_true;   % initial mean
 
-Qs = (1e-9)^2 * eye(3);    % process noise
-M = [zeros(3);             % process noise mapping matrix
-    eye(3)];
+sig_qr = (1e-3);
+sig_qv = (1e-6);
+Qs = blkdiag(sig_qr^2*eye(3),sig_qv^2*eye(3));    % process noise
+Ms = eye(6);                                      % process noise mapping matrix
+    
 
 L = eye(3);     % measurement noise mapping matrix?
 
 % EKF propagation to get state and covariance at TCA
-[xkp1,mkp1,Pkp1] = EKF(x0_S1_ref,m0_S1,P0_S1,z1,tk_vec,Rk,Qs,M,L,mu,1,'Satellite 1',ode_opts);
-[xkp2,mkp2,Pkp2] = EKF(x0_S2_ref,m0_S2,P0_S2,z2,tk_vec,Rk,Qs,M,L,mu,1,'Satellite 1',ode_opts);
+[xkp1,mkp1,Pkp1] = EKF(x0_S1_ref,m0_S1,P0_S1,z1,tk_vec,Rk,Qs,Ms,L,mu,1,'Satellite 1',ode_opts);
+[xkp2,mkp2,Pkp2] = EKF(x0_S2_ref,m0_S2,P0_S2,z2,tk_vec,Rk,Qs,Ms,L,mu,1,'Satellite 2',ode_opts);
 
 % estimated state of satellite (to use in controller)
 r1_vec = xkp1(1:3); 
@@ -176,10 +186,10 @@ Theta = 1/2*atan2(2*rho_xi_zeta*sig_xi*sig_zeta,(sig_xi^2-sig_zeta^2));
 sig_x = sqrt(Cr_rtn(1,1));
 sig_y = sqrt(Cr_rtn(2,2));
 sig_xi_test = sqrt( ...
-        (sig_x^2 + sig_y^2 + (sig_x^2 - sig_y^2)*cos(2*Theta)) / 2 ...
+        (sig_x^2 + sig_y^2 - (sig_x^2 - sig_y^2)*cos(2*Theta)) / 2 ...
               );
 sig_zeta_test = sqrt( ...
-        (sig_x^2 + sig_y^2 - (sig_x^2 - sig_y^2)*cos(2*Theta)) / 2 ...
+        (sig_x^2 + sig_y^2 + (sig_x^2 - sig_y^2)*cos(2*Theta)) / 2 ...
                 );
 rho_xi_zeta_test = (sig_x^2 - sig_y^2) * sin(2*Theta) / sig_xi / sig_zeta;
 
@@ -190,18 +200,6 @@ Q = [
     ];
 
 
-%% Timing paramters (thrust arc and coast arc)
-
-npts = 10000;
-del_theta_t = 180 * pi/180; % thrust arc duration (mess around w this)
-n_revs = pi - del_theta_t/2; % next conjunction 180 degrees after first
-del_theta_c = 2*pi*n_revs - del_theta_t/2;
-theta_c = 2*pi*n_revs + del_theta_t/2;
-
-tf = del_theta_t/n1+t0;
-t = linspace(t0,tf,npts);
-
-
 %% TPBVP Initial conditions and necessary parameters
 
 r1 = norm(r1_vec);
@@ -209,10 +207,6 @@ r2 = norm(r2_vec);
 v1 = norm(v1_vec);
 v2 = norm(v2_vec);
 
-[r1_vec_rtn] = eci2rtn(r1_vec,r1_vec,v1_vec);
-[v1_vec_rtn] = eci2rtn(v1_vec,r1_vec,v1_vec);
-[r2_vec_rtn] = eci2rtn(r2_vec,r1_vec,v1_vec);
-[v2_vec_rtn] = eci2rtn(v2_vec,r1_vec,v1_vec);
 [r1_vec_enc] = eci2enc(r1_vec,v1_vec,r2_vec,v2_vec);
 
 xi0 = r1_vec_enc(1);
@@ -221,6 +215,12 @@ b0 = [xi0; zeta0];
 
 
 %% Run TPBVP
+
+% timing parameters for integration
+npts = 10000;
+tf = del_theta_t/n1+t0;
+t = linspace(t0,tf,npts);
+
 
 % obtaining lambda0 guess using Q*bf using tangential CAM eqns
 del_r1 = 2*a0*r1^3/mu*(del_theta_t+sin(del_theta_c)-sin(del_theta_t+del_theta_c));
@@ -264,17 +264,12 @@ y = bplane2y(xi,zeta,Theta);
 p_t0_Ayuso = p_collision_calc_Ayuso(x(1),y(1),sig_x,sig_y,sA)
 p_tf_Ayuso = p_collision_calc_Ayuso(x(end),y(end),sig_x,sig_y,sA)
 
-% trunc = 4;
-% p_t0_Chan = p_collision_calc_Chan(xi(1),zeta(1),sig_xi,sig_zeta,rho_xi_zeta,sA,trunc);
-% p_tf_Chan = p_collision_calc_Chan(xi(end),zeta(end),sig_xi,sig_zeta,rho_xi_zeta,sA,trunc);
-
 
 %% finding control input and propagating S1 with control input
 
 u = NaN(3,length(t));
 tangential_test = NaN(1,length(t));
 dbdt = NaN(2,length(t));
-%p_Chan = NaN(1,length(t));
 p_Ayuso = NaN(1,length(t));
 
 % control input calc
@@ -319,22 +314,26 @@ for ct=1:length(t)
     u(:,ct) = a0*M'*lambda(:,ct) / norm(M'*lambda(:,ct));
     dbdt(:,ct) = M * u(:,ct);
     p_Ayuso(ct) = p_collision_calc_Ayuso(x(ct),y(ct),sig_x,sig_y,sA);
-    %p_Chan(ct) = p_collision_calc_Chan(xi(ct),zeta(ct),sig_xi,sig_zeta,rho_xi_zeta,sA,trunc);
 
 end
 u_hat = u./vecnorm(u);
 
 
 % propagating S1 w/ control input and uncontrolled S2
-% may want to plot state vs time cus its hard to see with a small u_max
 [~,x_S1_controlled] = ode45(@eom_tbp_state_controlled, t ,[r1_vec; v1_vec], ode_opts, mu, t, u);  
 x_S1_controlled = x_S1_controlled';
+[~,x_S1_uncontrolled] = ode45(@eom_tbp_state, t ,[r1_vec; v1_vec], ode_opts, mu);  
+x_S1_uncontrolled = x_S1_uncontrolled';
 [~,x_S2] = ode45(@eom_tbp_state, t ,[r2_vec; v2_vec], ode_opts, mu);  
 x_S2 = x_S2';
+dist_controlled = vecnorm(x_S1_controlled(1:3,:)-x_S2(1:3,:));
+dist_uncontrolled = vecnorm(x_S1_uncontrolled(1:3,:)-x_S2(1:3,:));
 
 for k=1:npts
     r1_rtn = eci2rtn(x_S1_controlled(1:3,k),x_S1_controlled(1:3,k),x_S1_controlled(4:6,k));
+    v1_rtn = eci2rtn(x_S1_controlled(4:6,k),x_S1_controlled(1:3,k),x_S1_controlled(4:6,k));
     tangential_test(k) = dot(r1_rtn,u(:,k))/(norm(r1_rtn)*norm(u(:,k)));
+    tangential_test2(k) = dot(v1_rtn,u(:,k))/(norm(r1_rtn)*norm(u(:,k)));
 end
 
 
@@ -342,23 +341,18 @@ end
 figure()
 scatter3(z1(1,:)/1000,z1(2,:)/1000,z1(3,:)/1000,5,'filled','r')
 hold on
-plot3(x_S1_backprop(1,:)/1000,x_S1_backprop(2,:)/1000,x_S1_backprop(3,:)/1000,'-r')
-hold on
 scatter3(z2(1,:)/1000,z2(2,:)/1000,z2(3,:)/1000,5,'filled','g')
 hold on
-plot3(x_S2_backprop(1,:)/1000,x_S2_backprop(2,:)/1000,x_S2_backprop(3,:)/1000,'-g')
-hold on
-plot3(x_S1_controlled(1,:)/1000,x_S1_controlled(2,:)/1000,x_S1_controlled(3,:)/1000,'--r')
+plot3(x_S1_controlled(1,:)/1000,x_S1_controlled(2,:)/1000,x_S1_controlled(3,:)/1000,'-r')
 hold on
 plot3(x_S2(1,:)/1000,x_S2(2,:)/1000,x_S2(3,:)/1000,'-g')
 hold on
 plot_Earth_AAE590;
 grid on
-title('$S_1$ and $S_2$ pre/post TCA','Interpreter','latex')
-legend('$S_1$ measurements pre TCA','$S_1$ true path pre TCA', ...
-    '$S_2$ measurements pre TCA','$S_2$ true path pre TCA', ...
-    'controlled $S_1$ path post TCA', '$S_2$ path post TCA', ...
-    'interpreter','latex')
+title('$S_1$ and $S_2$ pre/post maneuver','Interpreter','latex')
+legend('$S_1$ measurements pre maneuver','$S_2$ measurements pre maneuver', ...
+    'controlled $S_1$ path post maneuver', '$S_2$ path post maneuver', ...
+    'interpreter','latex','Location','southoutside')
 
 
 % plot of state and control history
@@ -396,56 +390,90 @@ ylabel('$u \; [\frac{m}{s^2}]$','Interpreter','latex')
 xlim([t(1) t(end)])
 legend('$u_{r}$','$u_{\theta}$','$u_h$','Interpreter','latex')
 subplot(2,2,4);
-plot(t,tangential_test)
+plot(t,tangential_test2)
 grid on
-title('$\hat{u} \cdot \hat{r}$ vs $t$','Interpreter','latex')
+title('$\hat{u} \cdot \hat{v}$ vs $t$','Interpreter','latex')
 xlabel('$t \; [s]$','Interpreter','latex')
-ylabel('$\hat{u} \cdot \hat{r}$','Interpreter','latex')
+ylabel('$\hat{u} \cdot \hat{v}$','Interpreter','latex')
 xlim([t(1) t(end)])
 
 
 % plot of state history in ECI frame
 figure()
-subplot(2,2,1);
-plot(t,x_S1_controlled(1,:),'r')
+subplot(2,1,1);
+plot(t,dist_controlled)
 hold on
-plot(t,x_S2(1,:),'g')
+plot(t,dist_uncontrolled)
 grid on
-title('$x$ vs $t$','Interpreter','latex')
+title('$d = r_{S_1}-r_{S_2}$ vs $t$','Interpreter','latex')
 xlabel('$t \; [s]$','Interpreter','latex')
-ylabel('$x \; [m]$','Interpreter','latex')
+ylabel('$\Delta_d \; [m]$','Interpreter','latex')
+legend('with controlled maneuever','without control','interpreter','latex')
 xlim([t(1) t(end)])
-legend('$x_{S_1}$','$x_{S_2}$','Interpreter','latex')
-subplot(2,2,2);
-plot(t,x_S1_controlled(2,:),'r')
-hold on
-plot(t,x_S2(2,:),'g')
+subplot(2,1,2);
+semilogy(t,p_Ayuso,'k')
 grid on
-title('$y$ vs $t$','Interpreter','latex')
-xlabel('$t \; [s]$','Interpreter','latex')
-ylabel('$y \; [m]$','Interpreter','latex')
-xlim([t(1) t(end)])
-legend('$y_{S_1}$','$y_{S_2}$','Interpreter','latex')
-subplot(2,2,3);
-plot(t,x_S1_controlled(1,:),'r')
-hold on
-plot(t,x_S2(1,:),'g')
-grid on
-title('$z$ vs $t$','Interpreter','latex')
-xlabel('$t \; [s]$','Interpreter','latex')
-ylabel('$z \; [m]$','Interpreter','latex')
-xlim([t(1) t(end)])
-legend('$z_{S_1}$','$z_{S_2}$','Interpreter','latex')
-subplot(2,2,4);
-plot(t,p_Ayuso,'k')
-grid on
-title('$P_{collision}$ vs $t$','Interpreter','latex')
+title('$P_{collision}$ vs $t$ with controlled maneuver','Interpreter','latex')
 xlabel('$t \; [s]$','Interpreter','latex')
 ylabel('$P_{collision}$','Interpreter','latex')
 xlim([t(1) t(end)])
 
 
+%% P vs nrevs
+
+revs = .25:.5:7;
+out = [];
+for i = 1:length(revs)
+
+    theta_c_new = 2*pi*revs(i) + del_theta_t/2;
+    del_theta_c_new = 2*pi*revs(i) - del_theta_t/2;
+
+    del_r1_new = 2*a0*r1^3/mu*(del_theta_t+sin(del_theta_c_new)-sin(del_theta_t+del_theta_c_new));
+    del_t_new = a0*r1^(7/2)/mu^(3/2)*(3*del_theta_t*(del_theta_t/2+del_theta_c_new)- ...
+            8*sin(del_theta_t/2)*sin(del_theta_t/2+del_theta_c_new));
+    if r2 > r1
+        xif_guess_new = xi0 - del_r1_new;
+    elseif r1 > r2
+        xif_guess_new = xi0 + del_r1_new;
+    end
+    zetaf_guess_new = zeta0+a0*r1^3/mu*cos(kappa/2)* ...
+                    (3*del_theta_t*(del_theta_t/2+del_theta_c_new)- ...
+                    8*sin(del_theta_t/2)*sin(del_theta_t/2+del_theta_c_new));
+    bf_guess_new = [xif_guess_new; zetaf_guess_new];
+    lambda0_guess_new = Q*bf_guess_new;
+    
+
+    solinit = bvpinit(t, [b0; lambda0_guess_new]);
+    sol = bvp4c( ...
+        @ (t,y) bvp_ode(t,y,kappa,v1,n1,r1,a0,theta1,theta_c_new,r2), ...
+        @ (ya,yb) bvp_bc(ya,yb,b0,Q), ...
+        solinit, ...
+        bvp_opts  ...
+    );
+    
+    xi_new = sol.y(1,:);
+    zeta_new = sol.y(2,:);
+    
+    x_new = bplane2x(xi_new,zeta_new,Theta);
+    y_new = bplane2y(xi_new,zeta_new,Theta);
+    
+    p_t0_new = p_collision(x_new(1),y_new(1),sig_x,sig_y,s1+s2);
+    p_tf_new = p_collision(x_new(end),y_new(end),sig_x,sig_y,s1+s2);
+
+    out(i) = p_tf_new;
+end
+
+figure()
+semilogy(revs,out); 
+grid on; 
+box on;
+title('$P_{collision}(t_f)$ vs $n_{revs}$','Interpreter','latex')
+xlabel('$n_{revs}$','Interpreter','latex')
+ylabel('$P_{collision}(t_f)$','Interpreter','latex')
+
 toc
+
+
 
 
 %% Functions  
@@ -739,6 +767,7 @@ function [xk,mkp,Pkp] = EKF(x0,m0,P0,z,t_vec,Rk,Qs,M,L,mu,flag,satname,ode_opts)
             hold on
             plot(tplot(1,:), 3*splot(i,:), 'Color', C(2,:), 'LineWidth', 1.2);
             plot(tplot(1,:), -3*splot(i,:), 'Color', C(2,:), 'LineWidth', 1.2);
+            grid on
             xlabel(xlab,'interpreter','latex');
             ylabel(ylab{i},'interpreter','latex');
             title(tit(i),'interpreter','latex');
