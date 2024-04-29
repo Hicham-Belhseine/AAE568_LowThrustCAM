@@ -4,13 +4,17 @@ Spring 2024 AAE 568 final project working repo for an optimal low-thrust CAM.
 
 ## Usage
 
-After cloning repo, simple add scripts path and call the run_CAM.m script. 
+After cloning repo, simply add the scripts path and call the run_CAM.m or run_CAM_with_estimation.m script. 
 
 ```matlab
 >> addpath('scripts')
 >> run_CAM
 ```
-
+or
+```matlab
+>> addpath('scripts')
+>> run_CAM
+```
 ## References
 
 [1] J. Hernando-Ayuso and C. Bombardelli, “Low-thrust collision avoidance in circular orbits,” Journal of Guidance, Control, and Dynamics, vol. 44, no. 5, pp. 983–995, 2021. [Online]. Available: https://doi.org/10.2514/1.G005547 
